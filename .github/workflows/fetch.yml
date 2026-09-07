@@ -11,7 +11,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v3
-      - name: Fetch Weather Closures and Hazards
+      - name: Fetch Weather Closures and Events Only
         run: |
           python -c "
           import urllib.request, json, ssl
@@ -20,12 +20,11 @@ jobs:
           ctx.check_hostname = False
           ctx.verify_mode = ssl.CERT_NONE
 
-          # Target all 511 Virginia map layer feeds
+          # Dedicated VDOT Weather, Closure, and Event Layer Endpoints (No 'incidents')
           urls = [
-              'https://511.vdot.virginia.gov/services/map/layers/map/closures',
               'https://511.vdot.virginia.gov/services/map/layers/map/weatherclosures',
-              'https://511.vdot.virginia.gov/services/map/layers/map/events',
-              'https://511.vdot.virginia.gov/services/map/layers/map/incidents'
+              'https://511.vdot.virginia.gov/services/map/layers/map/closures',
+              'https://511.vdot.virginia.gov/services/map/layers/map/events'
           ]
 
           headers = {
@@ -34,7 +33,7 @@ jobs:
               'Referer': 'https://511.vdot.virginia.gov/'
           }
 
-          filtered_features = []
+          all_features = []
           seen_ids = set()
 
           for url in urls:
@@ -48,29 +47,17 @@ jobs:
                               item_id = f.get('id') or f.get('properties', {}).get('id')
                               if item_id and item_id in seen_ids:
                                   continue
-
-                              props = f.get('properties', {})
-                              inc_type = str(props.get('type', '')).lower()
-                              msg = (str(props.get('message_511', '')) + ' ' + str(props.get('location', ''))).lower()
-
-                              # Discard ONLY pure breakdowns/crashes with zero weather or road closure context
-                              is_pure_disabled = inc_type in ['disabled vehicle', 'disabled bus'] and 'weather' not in msg and 'closure' not in msg
-                              is_pure_crash = inc_type in ['vehicle accident', 'multi-vehicle accident', 'vehicle crash'] and 'weather' not in msg and 'closure' not in msg and 'tree' not in msg and 'flood' not in msg
-
-                              if is_pure_disabled or is_pure_crash:
-                                  continue
-
-                              # Retain all weather closures, road closures, detours, and weather events
-                              filtered_features.append(f)
+                              all_features.append(f)
                               if item_id:
                                   seen_ids.add(item_id)
+                          print(f'SUCCESS: {url} returned {len(feats)} features')
               except Exception as e:
                   print(f'Fetching {url}: {e}')
 
-          out_data = {'type': 'FeatureCollection', 'features': filtered_features}
+          out_data = {'type': 'FeatureCollection', 'features': all_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
-          print(f'Successfully saved {len(filtered_features)} weather closures/hazards.')
+          print(f'TOTAL: Saved {len(all_features)} weather closure/event features to vdot.json')
           "
 
       - name: Commit Updated Feed
@@ -78,5 +65,5 @@ jobs:
           git config --global user.name "NWS Relay Bot"
           git config --global user.email "bot@github.com"
           git add vdot.json
-          git commit -m "Capture Appomattox weather closure" || exit 0
+          git commit -m "Fetch strictly weather closures and events" || exit 0
           git push
