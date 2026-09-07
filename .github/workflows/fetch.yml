@@ -1,8 +1,8 @@
 name: VDOT Feed Relay
 on:
   schedule:
-    - cron: '*/5 * * * *' # Pulls new VDOT data every 5 minutes
-  workflow_dispatch: # Allows manual triggers
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   update-feed:
@@ -11,7 +11,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v3
-      - name: Fetch Live VDOT Data via Python
+      - name: Fetch Live VDOT Weather Hazards via Python
         run: |
           python -c "
           import urllib.request, json, ssl
@@ -20,7 +20,6 @@ jobs:
           ctx.check_hostname = False
           ctx.verify_mode = ssl.CERT_NONE
 
-          # New 511 Virginia API endpoints
           urls = [
               'https://511.vdot.virginia.gov/services/map/layers/map/incidents',
               'https://511.vdot.virginia.gov/services/map/layers/map/closures',
@@ -28,12 +27,15 @@ jobs:
           ]
 
           headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36',
               'Accept': 'application/json, text/plain, */*',
               'Referer': 'https://511.vdot.virginia.gov/'
           }
 
-          all_features = []
+          # Keywords to isolate weather hazards
+          keywords = ['tree', 'limb', 'branch', 'flood', 'water', 'closure', 'closed', 'debris', 'wire', 'pole', 'ice', 'snow', 'hazard', 'impassable']
+
+          weather_features = []
 
           for url in urls:
               try:
@@ -41,19 +43,20 @@ jobs:
                   with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
                       text = resp.read().decode('utf-8').strip()
                       if text.startswith('{') and 'features' in text:
-                          parsed = json.loads(text)
-                          feats = parsed.get('features', [])
-                          print(f'SUCCESS: {url} returned {len(feats)} features')
-                          all_features.extend(feats)
-                      else:
-                          print(f'NON-JSON: {url} returned {text[:80]}')
+                          feats = json.loads(text).get('features', [])
+                          for f in feats:
+                              props = f.get('properties', {})
+                              msg = (str(props.get('message_511', '')) + ' ' + str(props.get('type', ''))).lower()
+                              # Save if description matches any weather keyword OR if it's a road closure
+                              if any(k in msg for k in keywords) or props.get('icon') == 'closure':
+                                  weather_features.append(f)
               except Exception as e:
-                  print(f'ERROR: {url} failed with {e}')
+                  print(f'Error fetching {url}: {e}')
 
-          out_data = {'type': 'FeatureCollection', 'features': all_features}
+          out_data = {'type': 'FeatureCollection', 'features': weather_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
-          print(f'TOTAL: {len(all_features)} features written to vdot.json')
+          print(f'Saved {len(weather_features)} weather-related hazards to vdot.json')
           "
 
       - name: Commit Updated Feed
@@ -61,5 +64,5 @@ jobs:
           git config --global user.name "NWS Relay Bot"
           git config --global user.email "bot@github.com"
           git add vdot.json
-          git commit -m "Auto-update VDOT feed" || exit 0
+          git commit -m "Auto-update VDOT weather hazards" || exit 0
           git push
