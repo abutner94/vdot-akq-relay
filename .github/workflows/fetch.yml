@@ -11,7 +11,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v3
-      - name: Fetch Strictly Weather Hazards and Closures
+      - name: Fetch Closures and Weather Events Only
         run: |
           python -c "
           import urllib.request, json, ssl
@@ -32,20 +32,18 @@ jobs:
               'Referer': 'https://511.vdot.virginia.gov/'
           }
 
-          # Specific weather keywords (removed generic 'closed' / 'hazard' words)
-          weather_phrases = [
+          # Discard routine non-closure traffic items
+          routine_traffic = [
+              'disabled vehicle', 'vehicle accident', 'multi-vehicle accident',
+              'vehicle crash', 'vehicle fire', 'other traffic', 'congestion', 'disabled bus'
+          ]
+
+          # Weather keywords
+          weather_keywords = [
               'tree', 'trees', 'limb', 'limbs', 'branch', 'debris',
               'flood', 'flooding', 'high water', 'standing water', 'water over road', 'water on road',
               'wire', 'wires', 'pole', 'line down', 'lines down',
-              'ice', 'snow', 'freezing', 'sleet', 'slick',
-              'weather', 'impassable'
-          ]
-
-          # Strict routine traffic types to discard
-          routine_traffic_types = [
-              'disabled vehicle', 'vehicle accident', 'multi-vehicle accident',
-              'vehicle crash', 'vehicle fire', 'other traffic', 'congestion',
-              'construction', 'maintenance', 'disabled bus', 'work zone'
+              'ice', 'snow', 'freezing', 'sleet', 'slick', 'weather', 'impassable'
           ]
 
           filtered_features = []
@@ -68,16 +66,16 @@ jobs:
                               msg = (str(props.get('message_511', '')) + ' ' + str(props.get('location', ''))).lower()
                               icon = str(props.get('icon', '')).lower()
 
-                              is_routine = any(rt in inc_type for rt in routine_traffic_types)
-                              has_weather = any(wp in msg or wp in inc_type for wp in weather_phrases)
-                              is_weather_icon = icon in ['weatherclosure', 'event'] or 'weather' in inc_type
+                              is_routine = any(rt in inc_type for rt in routine_traffic)
+                              has_weather = any(wk in msg or wk in inc_type for wk in weather_keywords)
+                              is_closure_or_event = icon in ['closure', 'weatherclosure', 'event'] or 'closure' in inc_type or 'closed' in inc_type or 'event' in inc_type or 'weather' in inc_type
 
-                              # Drop routine traffic unless explicit weather terms are present
-                              if is_routine and not has_weather:
+                              # Keep all road closures, weather events, and weather-related incidents.
+                              # Discard only routine crashes/disabled vehicles that are NOT closures.
+                              if is_routine and not has_weather and not is_closure_or_event:
                                   continue
 
-                              # Keep if it contains explicit weather terms or is a weather event
-                              if has_weather or is_weather_icon:
+                              if is_closure_or_event or has_weather:
                                   filtered_features.append(f)
                                   if item_id:
                                       seen_ids.add(item_id)
@@ -87,7 +85,7 @@ jobs:
           out_data = {'type': 'FeatureCollection', 'features': filtered_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
-          print(f'Successfully saved {len(filtered_features)} strictly weather-related items to vdot.json')
+          print(f'Successfully saved {len(filtered_features)} closures and weather items.')
           "
 
       - name: Commit Updated Feed
@@ -95,5 +93,5 @@ jobs:
           git config --global user.name "NWS Relay Bot"
           git config --global user.email "bot@github.com"
           git add vdot.json
-          git commit -m "Filter strictly weather hazards" || exit 0
+          git commit -m "Auto-update closures and weather events" || exit 0
           git push
