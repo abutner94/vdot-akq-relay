@@ -14,38 +14,46 @@ jobs:
       - name: Fetch Live VDOT Data via Python
         run: |
           python -c "
-          import urllib.request, json
+          import urllib.request, json, ssl
 
-          # Fallback list includes VDOT Open Data ArcGIS endpoint (never blocks Cloud IPs)
+          # Bypass SSL handshake drops on state endpoints
+          ctx = ssl.create_default_context()
+          ctx.check_hostname = False
+          ctx.verify_mode = ssl.CERT_NONE
+
           urls = [
-              'https://services1.arcgis.com/K1209S082P1I9083/arcgis/rest/services/VDOT_Incidents/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson',
-              'https://www.511virginia.org/data/geojson/icons.incident.geojson'
+              'https://www.511virginia.org/data/geojson/icons.incident.geojson',
+              'https://www.511virginia.org/data/geojson/icons.closures.geojson',
+              'https://www.511virginia.org/data/geojson/icons.weatherclosure.geojson'
           ]
 
           headers = {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36',
-              'Accept': 'application/json'
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+              'Accept': 'application/json, text/plain, */*',
+              'Referer': 'https://www.511virginia.org/'
           }
 
-          out_data = {'type': 'FeatureCollection', 'features': []}
+          all_features = []
 
           for url in urls:
               try:
                   req = urllib.request.Request(url, headers=headers)
-                  with urllib.request.urlopen(req, timeout=15) as resp:
+                  with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
                       text = resp.read().decode('utf-8').strip()
                       if text.startswith('{') and 'features' in text:
                           parsed = json.loads(text)
-                          if 'features' in parsed:
-                              out_data = parsed
-                              print(f'Successfully pulled data from {url}')
-                              break
+                          feats = parsed.get('features', [])
+                          print(f'{url}: fetched {len(feats)} features')
+                          all_features.extend(feats)
+                      else:
+                          print(f'{url}: non-JSON response ({text[:60]})')
               except Exception as e:
-                  print(f'Failed {url}: {e}')
+                  print(f'{url}: failed with {e}')
 
-          # Always overwrite vdot.json with valid GeoJSON
+          out_data = {'type': 'FeatureCollection', 'features': all_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
+          print(f'Total features written to vdot.json: {len(all_features)}')
           "
 
       - name: Commit Updated Feed
