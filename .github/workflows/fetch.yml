@@ -28,17 +28,10 @@ jobs:
               'Referer': 'https://511.vdot.virginia.gov/'
           }
 
-          routine_types = [
+          routine_noise = [
               'disabled vehicle', 'disabled bus', 'vehicle accident',
               'multi-vehicle accident', 'vehicle crash', 'vehicle fire',
               'other traffic', 'congestion'
-          ]
-
-          weather_keywords = [
-              'weather', 'tree', 'trees', 'limb', 'limbs', 'branch', 'debris',
-              'flood', 'flooding', 'high water', 'standing water', 'water over',
-              'water on road', 'wire', 'wires', 'pole', 'line down', 'lines down',
-              'ice', 'snow', 'freezing', 'sleet', 'slick', 'impassable', 'detour'
           ]
 
           filtered_features = []
@@ -58,19 +51,15 @@ jobs:
                           msg = str(props.get('message_511', '')).strip().lower()
                           icon = str(props.get('icon', '')).strip().lower()
 
-                          # Rule 1: Always keep items typed as Weather Closure, Closure, or Event
-                          if 'weather' in inc_type or 'closure' in inc_type or 'event' in inc_type:
-                              filtered_features.append(f)
+                          is_routine = any(rn in inc_type for rn in routine_noise)
+                          has_weather_or_closure = any(k in msg or k in inc_type for k in ['weather', 'closure', 'closed', 'detour', 'flood', 'tree', 'debris', 'hazard', 'impassable', 'high water']) or icon in ['weatherclosure', 'closure', 'event']
+
+                          # Skip pure routine traffic that lacks weather or closure keywords
+                          if is_routine and not has_weather_or_closure:
                               continue
 
-                          # Rule 2: Exclude routine breakdowns/crashes unless description mentions weather terms
-                          if any(rt in inc_type for rt in routine_types):
-                              if any(wk in msg for wk in weather_keywords):
-                                  filtered_features.append(f)
-                              continue
-
-                          # Rule 3: Keep remaining road hazards with weather keywords or closure icons
-                          if any(wk in msg or wk in inc_type for wk in weather_keywords) or icon in ['closure', 'weatherclosure', 'event']:
+                          # Retain weather closures, road closures, and weather hazards
+                          if has_weather_or_closure or 'weather' in inc_type or 'closure' in inc_type:
                               filtered_features.append(f)
 
           except Exception as e:
@@ -79,7 +68,7 @@ jobs:
           out_data = {'type': 'FeatureCollection', 'features': filtered_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
-          print(f'Successfully saved {len(filtered_features)} weather items to vdot.json')
+          print(f'Saved {len(filtered_features)} weather items to vdot.json')
           "
 
       - name: Commit Updated Feed
