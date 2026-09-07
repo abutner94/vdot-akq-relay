@@ -11,7 +11,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v3
-      - name: Fetch Closures and Weather Hazards
+      - name: Fetch Weather Closures and Hazards
         run: |
           python -c "
           import urllib.request, json, ssl
@@ -20,10 +20,12 @@ jobs:
           ctx.check_hostname = False
           ctx.verify_mode = ssl.CERT_NONE
 
+          # Target all 511 Virginia map layer feeds
           urls = [
-              ('https://511.vdot.virginia.gov/services/map/layers/map/closures', 'closure_layer'),
-              ('https://511.vdot.virginia.gov/services/map/layers/map/events', 'event_layer'),
-              ('https://511.vdot.virginia.gov/services/map/layers/map/incidents', 'incident_layer')
+              'https://511.vdot.virginia.gov/services/map/layers/map/closures',
+              'https://511.vdot.virginia.gov/services/map/layers/map/weatherclosures',
+              'https://511.vdot.virginia.gov/services/map/layers/map/events',
+              'https://511.vdot.virginia.gov/services/map/layers/map/incidents'
           ]
 
           headers = {
@@ -32,22 +34,10 @@ jobs:
               'Referer': 'https://511.vdot.virginia.gov/'
           }
 
-          routine_vehicle_types = [
-              'disabled vehicle', 'vehicle accident', 'multi-vehicle accident',
-              'vehicle crash', 'vehicle fire', 'disabled bus'
-          ]
-
-          weather_keywords = [
-              'tree', 'trees', 'limb', 'limbs', 'branch', 'debris',
-              'flood', 'flooding', 'high water', 'standing water', 'water over', 'water on road',
-              'wire', 'wires', 'pole', 'line down', 'lines down',
-              'ice', 'snow', 'freezing', 'sleet', 'slick', 'weather', 'impassable'
-          ]
-
           filtered_features = []
           seen_ids = set()
 
-          for url, layer_type in urls:
+          for url in urls:
               try:
                   req = urllib.request.Request(url, headers=headers)
                   with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
@@ -62,39 +52,25 @@ jobs:
                               props = f.get('properties', {})
                               inc_type = str(props.get('type', '')).lower()
                               msg = (str(props.get('message_511', '')) + ' ' + str(props.get('location', ''))).lower()
-                              icon = str(props.get('icon', '')).lower()
 
-                              is_routine_vehicle = any(rv in inc_type for rv in routine_vehicle_types)
-                              has_weather = any(wk in msg or wk in inc_type for wk in weather_keywords)
-                              is_full_road_closed = 'road closed' in msg or 'all lanes closed' in msg or 'both directions closed' in msg
+                              # Discard ONLY pure breakdowns/crashes with zero weather or road closure context
+                              is_pure_disabled = inc_type in ['disabled vehicle', 'disabled bus'] and 'weather' not in msg and 'closure' not in msg
+                              is_pure_crash = inc_type in ['vehicle accident', 'multi-vehicle accident', 'vehicle crash'] and 'weather' not in msg and 'closure' not in msg and 'tree' not in msg and 'flood' not in msg
 
-                              # 1. Always keep ALL items from the closures or events layers
-                              if layer_type in ['closure_layer', 'event_layer'] or icon in ['closure', 'weatherclosure', 'event']:
-                                  filtered_features.append(f)
-                                  if item_id: seen_ids.add(item_id)
+                              if is_pure_disabled or is_pure_crash:
                                   continue
 
-                              # 2. Always keep weather hazards or full road closures from incidents layer
-                              if has_weather or is_full_road_closed:
-                                  filtered_features.append(f)
-                                  if item_id: seen_ids.add(item_id)
-                                  continue
-
-                              # 3. Discard routine broken-down vehicles and minor crashes
-                              if is_routine_vehicle:
-                                  continue
-
-                              # 4. Keep remaining non-routine incidents
+                              # Retain all weather closures, road closures, detours, and weather events
                               filtered_features.append(f)
-                              if item_id: seen_ids.add(item_id)
-
+                              if item_id:
+                                  seen_ids.add(item_id)
               except Exception as e:
-                  print(f'Error fetching {url}: {e}')
+                  print(f'Fetching {url}: {e}')
 
           out_data = {'type': 'FeatureCollection', 'features': filtered_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
-          print(f'Successfully written {len(filtered_features)} items to vdot.json')
+          print(f'Successfully saved {len(filtered_features)} weather closures/hazards.')
           "
 
       - name: Commit Updated Feed
@@ -102,5 +78,5 @@ jobs:
           git config --global user.name "NWS Relay Bot"
           git config --global user.email "bot@github.com"
           git add vdot.json
-          git commit -m "Capture closures and weather events without vehicle noise" || exit 0
+          git commit -m "Capture Appomattox weather closure" || exit 0
           git push
