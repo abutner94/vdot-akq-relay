@@ -1,0 +1,23 @@
+name: VDOT Feed Relay
+on:
+  schedule:
+    - cron: '*/5 * * * *' # Pulls new VDOT data every 5 minutes
+  workflow_dispatch: # Allows you to run it manually
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v3
+      - name: Fetch Live VDOT GeoJSON
+        run: |
+          curl -s "https://www.511virginia.org/data/geojson/icons.incident.geojson" -o vdot.json
+      - name: Commit Updated Feed
+        run: |
+          git config --global user.name "NWS Relay Bot"
+          git config --global user.email "bot@github.com"
+          git add vdot.json
+          git commit -m "Auto-update VDOT feed" || exit 0
+          git push
