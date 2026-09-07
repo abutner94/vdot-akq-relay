@@ -11,9 +11,21 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v3
-      - name: Fetch Live VDOT GeoJSON
+      - name: Fetch Live VDOT Data
         run: |
-          curl -sL "https://www.511virginia.org/data/geojson/icons.incident.geojson" -o vdot.json
+          # Fetch with browser headers so VDOT returns JSON instead of the HTML web app
+          curl -sL \
+            -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" \
+            -H "Accept: application/json, text/plain, */*" \
+            -H "Referer: https://www.511virginia.org/" \
+            "https://www.511virginia.org/data/geojson/icons.incidents.geojson" -o vdot.json
+
+          # If the server still sends HTML, fallback to the public VDOT ArcGIS REST FeatureServer
+          if head -n 5 vdot.json | grep -q "<"; then
+            echo "511 server returned HTML, switching to VDOT ArcGIS endpoint..."
+            curl -sL "https://services1.arcgis.com/K1209S082P1I9083/arcgis/rest/services/VDOT_Incidents/FeatureServer/0/query?where=1%3D1&outFields=*&f=geojson" -o vdot.json
+          fi
+
       - name: Commit Updated Feed
         run: |
           git config --global user.name "NWS Relay Bot"
