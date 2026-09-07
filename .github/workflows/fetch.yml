@@ -20,7 +20,11 @@ jobs:
           ctx.check_hostname = False
           ctx.verify_mode = ssl.CERT_NONE
 
-          url = 'https://511.vdot.virginia.gov/services/map/layers/map/incidents'
+          urls = [
+              'https://511.vdot.virginia.gov/services/map/layers/map/incidents',
+              'https://511.vdot.virginia.gov/services/map/layers/map/events',
+              'https://511.vdot.virginia.gov/services/map/layers/map/closures'
+          ]
 
           headers = {
               'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36',
@@ -28,47 +32,79 @@ jobs:
               'Referer': 'https://511.vdot.virginia.gov/'
           }
 
-          routine_noise = [
+          # Strictly Discard Routine Breakdowns/Crashes (ONLY if no weather/closure keywords exist)
+          routine_noise_types = [
               'disabled vehicle', 'disabled bus', 'vehicle accident',
               'multi-vehicle accident', 'vehicle crash', 'vehicle fire',
-              'other traffic', 'congestion'
+              'congestion', 'construction'
+          ]
+
+          # Terms that explicitly classify an item as weather-related or a valid road closure
+          weather_closure_terms = [
+              'weather', 'closure', 'closed', 'detour', 'flood', 'flooding',
+              'high water', 'water over', 'water on road', 'tree', 'trees',
+              'limb', 'limbs', 'branch', 'debris', 'wire', 'wires', 'pole',
+              'line down', 'lines down', 'ice', 'snow', 'freezing', 'sleet',
+              'slick', 'impassable', 'downed', 'hazard'
           ]
 
           filtered_features = []
+          seen_ids = set()
 
-          try:
-              req = urllib.request.Request(url, headers=headers)
-              with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
-                  text = resp.read().decode('utf-8').strip()
-                  if text.startswith('{') and 'features' in text:
-                      data = json.loads(text)
-                      feats = data.get('features', [])
-                      print(f'Raw VDOT items fetched: {len(feats)}')
+          for url in urls:
+              try:
+                  req = urllib.request.Request(url, headers=headers)
+                  with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                      text = resp.read().decode('utf-8').strip()
+                      if text.startswith('{') and 'features' in text:
+                          feats = json.loads(text).get('features', [])
+                          print(f'{url}: raw count = {len(feats)}')
 
-                      for f in feats:
-                          props = f.get('properties', {})
-                          inc_type = str(props.get('type', '')).strip().lower()
-                          msg = str(props.get('message_511', '')).strip().lower()
-                          icon = str(props.get('icon', '')).strip().lower()
+                          for f in feats:
+                              item_id = str(f.get('id') or f.get('properties', {}).get('id') or '')
+                              if item_id and item_id in seen_ids:
+                                  continue
 
-                          is_routine = any(rn in inc_type for rn in routine_noise)
-                          has_weather_or_closure = any(k in msg or k in inc_type for k in ['weather', 'closure', 'closed', 'detour', 'flood', 'tree', 'debris', 'hazard', 'impassable', 'high water']) or icon in ['weatherclosure', 'closure', 'event']
+                              props = f.get('properties', {})
+                              
+                              # Concatenate all potential text fields to prevent missing data
+                              full_text = ' '.join([
+                                  str(props.get('type', '')),
+                                  str(props.get('event_type', '')),
+                                  str(props.get('category', '')),
+                                  str(props.get('message_511', '')),
+                                  str(props.get('description', '')),
+                                  str(props.get('details', '')),
+                                  str(props.get('headline', ''))
+                              ]).lower()
 
-                          # Skip pure routine traffic that lacks weather or closure keywords
-                          if is_routine and not has_weather_or_closure:
-                              continue
+                              icon = str(props.get('icon', '')).lower()
+                              inc_type = str(props.get('type', '')).lower()
 
-                          # Retain weather closures, road closures, and weather hazards
-                          if has_weather_or_closure or 'weather' in inc_type or 'closure' in inc_type:
+                              has_weather_or_closure = any(term in full_text for term in weather_closure_terms) or icon in ['weatherclosure', 'closure', 'event']
+                              is_routine_noise = any(rt in inc_type for rt in routine_noise_types)
+
+                              # IF it contains weather or closure keywords, ALWAYS KEEP IT (overrides routine noise)
+                              if has_weather_or_closure:
+                                  filtered_features.append(f)
+                                  if item_id: seen_ids.add(item_id)
+                                  continue
+
+                              # DISCARD routine traffic if no weather/closure keywords are found
+                              if is_routine_noise:
+                                  continue
+
+                              # Keep non-routine items by default
                               filtered_features.append(f)
+                              if item_id: seen_ids.add(item_id)
 
-          except Exception as e:
-              print(f'Error fetching VDOT feed: {e}')
+              except Exception as e:
+                  print(f'Error fetching {url}: {e}')
 
           out_data = {'type': 'FeatureCollection', 'features': filtered_features}
           with open('vdot.json', 'w') as f:
               json.dump(out_data, f)
-          print(f'Saved {len(filtered_features)} weather items to vdot.json')
+          print(f'Total weather/closure items saved to vdot.json: {len(filtered_features)}')
           "
 
       - name: Commit Updated Feed
@@ -76,5 +112,5 @@ jobs:
           git config --global user.name "NWS Relay Bot"
           git config --global user.email "bot@github.com"
           git add vdot.json
-          git commit -m "Capture weather closures and events" || exit 0
+          git commit -m "Comprehensive weather and closure text search" || exit 0
           git push
